@@ -1,0 +1,23 @@
+[package]
+name = "crt-off"
+version = "0.1.0"
+edition = "2024"
+description = "CRT screen-off animation for the terminal — vertical collapse with RGB chromatic aberration, scanline, and phosphor dot fade"
+license = "Apache-2.0"
+repository = "https://github.com/aovestdipaperino/crt-off"
+keywords = ["terminal", "animation", "crt", "retro", "tui"]
+categories = ["command-line-interface", "visualization"]
+exclude = ["ElectronBeam.java", "Kitt-logo.png"]
+
+[dependencies]
+crossterm = "0.28"
+image = { version = "0.25", default-features = false, features = ["png"] }
+logo-art = { version = "0.2.1", optional = true }
+
+[features]
+default = ["cli"]
+cli = ["dep:logo-art"]
+
+[[bin]]
+name = "crt-off"
+required-features = ["cli"]
