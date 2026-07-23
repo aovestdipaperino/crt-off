@@ -16,6 +16,8 @@ Renders a retro CRT power-off effect inspired by Android's
 the image collapses vertically with RGB chromatic aberration, shrinks to a
 bright horizontal scanline, then fades to a single phosphor dot.
 
+![CRT power-off demo](assets/demo.gif)
+
 ## Installation
 
 ### CLI
