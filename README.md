@@ -1,5 +1,10 @@
 # crt-off
 
+<p align="center">
+  <a href="https://ai.enzolombardi.net/"><img src="https://img.shields.io/badge/built%20with-AI-D97757?style=flat-square&labelColor=101010&logo=anthropic&logoColor=white" alt="Built with AI — part of Enzo Lombardi's AI portfolio"></a>
+</p>
+
+
 [![Crates.io](https://img.shields.io/crates/v/crt-off.svg)](https://crates.io/crates/crt-off)
 [![Docs.rs](https://docs.rs/crt-off/badge.svg)](https://docs.rs/crt-off)
 [![License](https://img.shields.io/crates/l/crt-off.svg)](LICENSE)
