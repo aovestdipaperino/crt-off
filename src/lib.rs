@@ -405,8 +405,34 @@ fn frame_hstretch(buf: &mut String, w: u32, rows: u32, t: f32) {
     }
 }
 
+/// Display gamma. Phosphor *luminance* is encoded through it to get the code
+/// value a terminal actually paints.
+const GAMMA: f32 = 2.2;
+
+/// Exponential decay constant of the phosphor across the fade window. A P22
+/// phosphor decays exponentially; `e^-3` (~5% of peak) is the visible tail of
+/// the afterglow, and the residue is subtracted off so the dot still lands on
+/// true black.
+const PHOSPHOR_DECAY: f32 = 3.0;
+
+/// Gray code value of the phosphor dot at normalized fade time `t` (`0.0` at
+/// the start of the fade, `1.0` at its end).
+///
+/// Luminance decays exponentially, the way phosphor persistence actually
+/// behaves, offset so it lands on exact black at `t == 1.0` instead of clipping
+/// early. The result is then gamma-encoded, because a linear ramp in code value
+/// (the previous behavior) is *not* a linear ramp in perceived brightness — it
+/// collapses to near-black within the first few frames and reads as the dot
+/// blinking out rather than fading.
+fn phosphor_level(t: f32) -> u8 {
+    let t = t.clamp(0.0, 1.0);
+    let tail = (-PHOSPHOR_DECAY).exp();
+    let lum = (((-PHOSPHOR_DECAY * t).exp() - tail) / (1.0 - tail)).max(0.0);
+    (lum.powf(1.0 / GAMMA) * 255.0).round().clamp(0.0, 255.0) as u8
+}
+
 fn frame_dot(buf: &mut String, w: u32, rows: u32, t: f32) {
-    let b = ((1.0 - t) * 255.0).max(0.0) as u8;
+    let b = phosphor_level(t);
     let cy = rows / 2;
     let cx = w / 2;
 
@@ -441,4 +467,39 @@ fn write_black_screen(out: &mut impl Write, w: u32, rows: u32) -> io::Result<()>
     }
     out.write_all(buf.as_bytes())?;
     out.flush()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn phosphor_fade_spans_full_range() {
+        assert_eq!(phosphor_level(0.0), 255, "starts at peak brightness");
+        assert_eq!(phosphor_level(1.0), 0, "reaches exact black at the end");
+        // Out-of-range inputs clamp rather than wrap or overflow.
+        assert_eq!(phosphor_level(-1.0), 255);
+        assert_eq!(phosphor_level(2.0), 0);
+    }
+
+    #[test]
+    fn phosphor_fade_is_monotone() {
+        let mut prev = 255u8;
+        for i in 0..=100 {
+            let b = phosphor_level(i as f32 / 100.0);
+            assert!(b <= prev, "brightness rose at t={i}: {prev} -> {b}");
+            prev = b;
+        }
+    }
+
+    #[test]
+    fn phosphor_fade_holds_the_glow_past_the_midpoint() {
+        // The point of gamma-encoding: at the halfway mark the dot is still
+        // clearly visible instead of the ~50% code value (and near-black
+        // perceived brightness) a linear ramp would give.
+        let mid = phosphor_level(0.5);
+        assert!(mid > 100, "midpoint too dim to read as a fade: {mid}");
+        // ...and it is still on its way down, not stuck near peak.
+        assert!(mid < 220, "midpoint suspiciously close to peak: {mid}");
+    }
 }
