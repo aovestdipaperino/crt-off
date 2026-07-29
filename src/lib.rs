@@ -387,7 +387,7 @@ fn frame_hstretch(buf: &mut String, w: u32, rows: u32, t: f32) {
                 if x >= x0 && x < x0 + lw {
                     write!(
                         buf,
-                        "\x1b[38;2;{b};{b};{b}m\x1b[48;2;0;0;0m\u{2580}",
+                        "\x1b[38;2;{b};{b};{b}m\x1b[48;2;0;0;0m\u{2581}",
                         b = brightness,
                     )
                     .unwrap();
@@ -440,7 +440,7 @@ fn frame_dot(buf: &mut String, w: u32, rows: u32, t: f32) {
         if row == cy && b > 0 {
             for x in 0..w {
                 if x == cx {
-                    write!(buf, "\x1b[38;2;{b};{b};{b}m\x1b[48;2;0;0;0m\u{2588}",).unwrap();
+                    write!(buf, "\x1b[38;2;{b};{b};{b}m\x1b[48;2;0;0;0m.",).unwrap();
                 } else {
                     buf.push_str("\x1b[48;2;0;0;0m ");
                 }
