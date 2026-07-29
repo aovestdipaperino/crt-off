@@ -1,6 +1,6 @@
 [package]
 name = "crt-off"
-version = "0.1.3"
+version = "0.1.4"
 readme = "README.md"
 edition = "2024"
 description = "CRT screen-off animation for the terminal — vertical collapse with RGB chromatic aberration, scanline, and phosphor dot fade"
