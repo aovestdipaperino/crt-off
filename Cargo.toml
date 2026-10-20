@@ -1,6 +1,6 @@
 [package]
 name = "crt-off"
-version = "0.1.4"
+version = "0.2.0"
 readme = "README.md"
 edition = "2024"
 description = "CRT screen-off animation for the terminal — vertical collapse with RGB chromatic aberration, scanline, and phosphor dot fade"
@@ -11,13 +11,15 @@ categories = ["command-line-interface", "visualization"]
 exclude = ["ElectronBeam.java", "Kitt-logo.png"]
 
 [dependencies]
-crossterm = "0.28"
+crossterm = { version = "0.28", optional = true }
 image = { version = "0.25", default-features = false, features = ["png"] }
 logo-art = { version = "0.2.1", optional = true }
 
 [features]
 default = ["cli"]
-cli = ["dep:logo-art"]
+# The animation in the terminal; without it, `render_frame` renders frames as pixels.
+terminal = ["dep:crossterm"]
+cli = ["terminal", "dep:logo-art"]
 
 [[bin]]
 name = "crt-off"

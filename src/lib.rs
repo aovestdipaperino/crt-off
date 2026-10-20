@@ -6,9 +6,14 @@
 //! the image collapses vertically with RGB chromatic aberration, shrinks to a
 //! bright horizontal scanline, then fades to a single phosphor dot.
 //!
+//! The terminal animation is behind the default `terminal` feature. Without it,
+//! [`render_frame`] still renders any moment of the effect as pixels, for a
+//! window or a video; played backwards, it is a CRT warming up.
+//!
 //! # Animate terminal content
 //!
 //! ```no_run
+//! # #[cfg(feature = "terminal")] {
 //! use crt_off::{ScreenBuffer, Config};
 //! use crossterm::terminal;
 //!
@@ -16,11 +21,13 @@
 //! let mut screen = ScreenBuffer::new(w as u32, h as u32);
 //! screen.fg(0, 255, 100).putln("Hello, retro world!");
 //! screen.animate(&Config::default()).unwrap();
+//! # }
 //! ```
 //!
 //! # Animate an image
 //!
 //! ```no_run
+//! # #[cfg(feature = "terminal")] {
 //! use crt_off::Config;
 //!
 //! let img = image::open("logo.png").unwrap();
@@ -33,13 +40,35 @@
 //!     image::imageops::FilterType::Lanczos3,
 //! );
 //! crt_off::animate(&resized.to_rgba8(), true, &Config::default()).unwrap();
+//! # }
+//! ```
+//!
+//! # Render frames as pixels
+//!
+//! ```
+//! use crt_off::Config;
+//!
+//! let logo = image::RgbaImage::from_pixel(64, 48, image::Rgba([0, 255, 100, 255]));
+//! let config = Config::default();
+//! // A CRT warming up: the power-off effect, played backwards.
+//! let fps = 60.0;
+//! let frames = (config.duration() * fps) as u32;
+//! for frame in (0..=frames).rev() {
+//!     let image = crt_off::render_frame(&logo, &config, f64::from(frame) / fps);
+//!     assert_eq!(image.dimensions(), (64, 48));
+//! }
 //! ```
 
+#[cfg(feature = "terminal")]
 use std::fmt::Write as _;
+#[cfg(feature = "terminal")]
 use std::io::{self, BufWriter, Write, stdout};
+#[cfg(feature = "terminal")]
 use std::thread;
+#[cfg(feature = "terminal")]
 use std::time::{Duration, Instant};
 
+#[cfg(feature = "terminal")]
 use crossterm::{cursor, event, execute, terminal};
 
 // ---------------------------------------------------------------------------
@@ -75,6 +104,96 @@ impl Default for Config {
     }
 }
 
+impl Config {
+    /// Seconds from the start of the collapse to the end of the dot fade: the
+    /// span [`render_frame`] covers, without the hold before it or the black
+    /// screen after it.
+    pub fn duration(&self) -> f64 {
+        self.vstretch_secs + self.hstretch_secs + self.dot_fade_secs
+    }
+}
+
+/// Renders the effect `t` seconds into the collapse, as an image the size of
+/// `img`: `t = 0` is `img` itself, [`Config::duration`] and later is black.
+///
+/// The phases are those of the terminal animation, drawn in pixels: the image
+/// squeezes to the centre row with each colour on its own curve and a rising
+/// glow, the bright line it becomes shrinks to the centre, and a phosphor dot
+/// fades out there.
+pub fn render_frame(img: &image::RgbaImage, config: &Config, t: f64) -> image::RgbaImage {
+    let (w, h) = img.dimensions();
+    let mut out = image::RgbaImage::from_pixel(w, h, image::Rgba([0, 0, 0, 255]));
+    if w == 0 || h == 0 {
+        return out;
+    }
+    if t <= 0.0 {
+        return img.clone();
+    }
+    if t < config.vstretch_secs {
+        pixels_vstretch(&mut out, img, (t / config.vstretch_secs) as f32);
+    } else if t < config.vstretch_secs + config.hstretch_secs {
+        let s = (t - config.vstretch_secs) / config.hstretch_secs;
+        pixels_hstretch(&mut out, s as f32);
+    } else if t < config.duration() {
+        let s = (t - config.vstretch_secs - config.hstretch_secs) / config.dot_fade_secs;
+        pixels_dot(&mut out, s as f32);
+    }
+    out
+}
+
+/// The scanline's and the dot's size in pixels: about what a terminal cell is
+/// next to a terminal-sized image.
+fn beam_size(w: u32, h: u32) -> (u32, u32) {
+    ((w / 80).max(1), (h / 60).max(1))
+}
+
+fn pixels_vstretch(out: &mut image::RgbaImage, img: &image::RgbaImage, t: f32) {
+    let ar = scurve(t, 7.5);
+    let ag = scurve(t, 8.0);
+    let ab = scurve(t, 8.5);
+    let h = img.height() as f32;
+    let comp = [h * (1.0 - ar), h * (1.0 - ag), h * (1.0 - ab)];
+    let ys = [
+        (h - comp[0]) / 2.0,
+        (h - comp[1]) / 2.0,
+        (h - comp[2]) / 2.0,
+    ];
+    let glow = ag * 180.0;
+    for y in 0..img.height() {
+        for x in 0..img.width() {
+            let (r, g, b) = sample(img, x, y as f32, h, &comp, &ys, glow);
+            out.put_pixel(x, y, image::Rgba([r, g, b, 255]));
+        }
+    }
+}
+
+fn pixels_hstretch(out: &mut image::RgbaImage, t: f32) {
+    let (w, h) = out.dimensions();
+    let a = scurve(t, 8.0);
+    let lw = ((2.0 * w as f32 * (1.0 - a)) as u32).min(w);
+    let b = ((1.0 - a * 0.75) * 255.0).max(0.0) as u8;
+    let (_, thick) = beam_size(w, h);
+    let (x0, y0) = (w.saturating_sub(lw) / 2, (h.saturating_sub(thick)) / 2);
+    for y in y0..(y0 + thick).min(h) {
+        for x in x0..x0 + lw {
+            out.put_pixel(x, y, image::Rgba([b, b, b, 255]));
+        }
+    }
+}
+
+fn pixels_dot(out: &mut image::RgbaImage, t: f32) {
+    let (w, h) = out.dimensions();
+    let b = phosphor_level(t);
+    let (size, _) = beam_size(w, h);
+    let (x0, y0) = (w.saturating_sub(size) / 2, h.saturating_sub(size) / 2);
+    for y in y0..(y0 + size).min(h) {
+        for x in x0..(x0 + size).min(w) {
+            out.put_pixel(x, y, image::Rgba([b, b, b, 255]));
+        }
+    }
+}
+
+#[cfg(feature = "terminal")]
 /// Run the CRT-off animation on an RGBA image.
 ///
 /// The image height must be even (each terminal row encodes two pixel rows
@@ -169,6 +288,7 @@ pub fn animate(rgba: &image::RgbaImage, use_alt_screen: bool, config: &Config) -
     Ok(())
 }
 
+#[cfg(feature = "terminal")]
 /// Buffer that prints to stdout while recording pixel data for animation.
 ///
 /// Each printed character is simultaneously recorded into an internal
@@ -184,6 +304,7 @@ pub struct ScreenBuffer {
     fg: [u8; 3],
 }
 
+#[cfg(feature = "terminal")]
 impl ScreenBuffer {
     /// Create a new buffer for a terminal of the given `width` and `height`.
     pub fn new(width: u32, height: u32) -> Self {
@@ -271,10 +392,12 @@ impl ScreenBuffer {
 // Terminal cleanup guard
 // ---------------------------------------------------------------------------
 
+#[cfg(feature = "terminal")]
 struct TermGuard {
     alternate_screen: bool,
 }
 
+#[cfg(feature = "terminal")]
 impl Drop for TermGuard {
     fn drop(&mut self) {
         let _ = terminal::disable_raw_mode();
@@ -305,6 +428,7 @@ fn scurve(value: f32, s: f32) -> f32 {
 // Frame builders
 // ---------------------------------------------------------------------------
 
+#[cfg(feature = "terminal")]
 fn frame_vstretch(
     buf: &mut String,
     img: &image::RgbaImage,
@@ -374,6 +498,7 @@ fn sample(
     }
 }
 
+#[cfg(feature = "terminal")]
 fn frame_hstretch(buf: &mut String, w: u32, rows: u32, t: f32) {
     let a = scurve(t, 8.0);
     let lw = ((2.0 * w as f32 * (1.0 - a)) as u32).min(w);
@@ -431,6 +556,7 @@ fn phosphor_level(t: f32) -> u8 {
     (lum.powf(1.0 / GAMMA) * 255.0).round().clamp(0.0, 255.0) as u8
 }
 
+#[cfg(feature = "terminal")]
 fn frame_dot(buf: &mut String, w: u32, rows: u32, t: f32) {
     let b = phosphor_level(t);
     let cy = rows / 2;
@@ -455,6 +581,7 @@ fn frame_dot(buf: &mut String, w: u32, rows: u32, t: f32) {
     }
 }
 
+#[cfg(feature = "terminal")]
 fn write_black_screen(out: &mut impl Write, w: u32, rows: u32) -> io::Result<()> {
     let mut buf = String::new();
     buf.push_str("\x1b[H");
@@ -472,6 +599,25 @@ fn write_black_screen(out: &mut impl Write, w: u32, rows: u32) -> io::Result<()>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_frame_at_the_start_is_the_image_and_at_the_end_is_black() {
+        let img = image::RgbaImage::from_pixel(40, 30, image::Rgba([10, 200, 30, 255]));
+        let config = Config::default();
+        assert_eq!(render_frame(&img, &config, 0.0), img);
+        let end = render_frame(&img, &config, config.duration());
+        assert!(end.pixels().all(|p| p.0 == [0, 0, 0, 255]));
+    }
+
+    #[test]
+    fn the_scanline_is_a_bright_line_across_the_middle() {
+        let img = image::RgbaImage::from_pixel(80, 60, image::Rgba([255; 4]));
+        let config = Config::default();
+        let line = render_frame(&img, &config, config.vstretch_secs + 0.01);
+        // One pixel thick in a 60-pixel image: row 29.
+        assert!(line.get_pixel(40, 29).0[0] > 200, "the middle is lit");
+        assert_eq!(line.get_pixel(40, 5).0, [0, 0, 0, 255], "above it is black");
+    }
 
     #[test]
     fn phosphor_fade_spans_full_range() {
