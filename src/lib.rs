@@ -141,10 +141,39 @@ pub fn render_frame(img: &image::RgbaImage, config: &Config, t: f64) -> image::R
     out
 }
 
-/// The scanline's and the dot's size in pixels: about what a terminal cell is
-/// next to a terminal-sized image.
-fn beam_size(w: u32, h: u32) -> (u32, u32) {
-    ((w / 80).max(1), (h / 60).max(1))
+/// Width, in pixels, of the beam's core: the scanline is a line one pixel thick
+/// and the dot a point, however large the image.
+const BEAM_CORE: f32 = 0.55;
+
+/// Width, in pixels, and strength of the faint glow around the beam's core.
+const BEAM_HALO: f32 = 2.0;
+const BEAM_HALO_LEVEL: f32 = 0.18;
+
+/// Colour of the glow, a little bluer than the white core.
+const BEAM_HALO_TINT: [f32; 3] = [0.75, 0.85, 1.0];
+
+/// How bright the beam is `d` pixels from its centre, as a white core and a
+/// tinted glow, each between `0.0` and `1.0`.
+fn beam_profile(d: f32) -> (f32, f32) {
+    let core = (-(d / BEAM_CORE).powi(2)).exp();
+    let halo = BEAM_HALO_LEVEL * (-(d / BEAM_HALO).powi(2)).exp();
+    (core, halo)
+}
+
+/// Lights `(x, y)` with a beam whose core is `core` and whose glow is `halo`,
+/// both already scaled by its brightness.
+fn put_beam(out: &mut image::RgbaImage, x: u32, y: u32, core: f32, halo: f32) {
+    let px = |c: usize| {
+        ((core + halo * BEAM_HALO_TINT[c]) * 255.0)
+            .round()
+            .clamp(0.0, 255.0) as u8
+    };
+    out.put_pixel(x, y, image::Rgba([px(0), px(1), px(2), 255]));
+}
+
+/// The rows and columns the beam's glow reaches either side of its centre.
+fn beam_reach() -> u32 {
+    (BEAM_HALO * 3.0).ceil() as u32
 }
 
 fn pixels_vstretch(out: &mut image::RgbaImage, img: &image::RgbaImage, t: f32) {
@@ -170,27 +199,45 @@ fn pixels_vstretch(out: &mut image::RgbaImage, img: &image::RgbaImage, t: f32) {
 fn pixels_hstretch(out: &mut image::RgbaImage, t: f32) {
     let (w, h) = out.dimensions();
     let a = scurve(t, 8.0);
-    let lw = ((2.0 * w as f32 * (1.0 - a)) as u32).min(w);
-    let b = ((1.0 - a * 0.75) * 255.0).max(0.0) as u8;
-    let (_, thick) = beam_size(w, h);
-    let (x0, y0) = (w.saturating_sub(lw) / 2, (h.saturating_sub(thick)) / 2);
-    for y in y0..(y0 + thick).min(h) {
-        for x in x0..x0 + lw {
-            out.put_pixel(x, y, image::Rgba([b, b, b, 255]));
+    let half = (w as f32 * (1.0 - a)).min(w as f32 / 2.0);
+    if half <= 0.0 {
+        return;
+    }
+    let level = (1.0 - a * 0.75).max(0.0);
+    // The line's ends fade over a stretch of it rather than stopping square.
+    let taper = 0.15 * half + 1.0;
+    let (cx, cy) = (w as f32 / 2.0, (h / 2) as f32 + 0.5);
+    let reach = beam_reach();
+    let x0 = (cx - half).floor().max(0.0) as u32;
+    let x1 = ((cx + half).ceil() as u32).min(w);
+    for y in (h / 2).saturating_sub(reach)..(h / 2 + reach + 1).min(h) {
+        let (core, halo) = beam_profile(y as f32 + 0.5 - cy);
+        for x in x0..x1 {
+            let along = half - (x as f32 + 0.5 - cx).abs();
+            let fade = smoothstep((along / taper).clamp(0.0, 1.0)) * level;
+            put_beam(out, x, y, core * fade, halo * fade);
         }
     }
 }
 
 fn pixels_dot(out: &mut image::RgbaImage, t: f32) {
     let (w, h) = out.dimensions();
-    let b = phosphor_level(t);
-    let (size, _) = beam_size(w, h);
-    let (x0, y0) = (w.saturating_sub(size) / 2, h.saturating_sub(size) / 2);
-    for y in y0..(y0 + size).min(h) {
-        for x in x0..(x0 + size).min(w) {
-            out.put_pixel(x, y, image::Rgba([b, b, b, 255]));
+    let level = f32::from(phosphor_level(t)) / 255.0;
+    let (cx, cy) = ((w / 2) as f32 + 0.5, (h / 2) as f32 + 0.5);
+    let reach = beam_reach();
+    for y in (h / 2).saturating_sub(reach)..(h / 2 + reach + 1).min(h) {
+        for x in (w / 2).saturating_sub(reach)..(w / 2 + reach + 1).min(w) {
+            let d = (x as f32 + 0.5 - cx).hypot(y as f32 + 0.5 - cy);
+            let (core, halo) = beam_profile(d);
+            // The dot is a little larger than the line's core, so it reads as a point.
+            let core = core.max((-(d / (BEAM_CORE * 1.6)).powi(2)).exp());
+            put_beam(out, x, y, core * level, halo * level);
         }
     }
+}
+
+fn smoothstep(x: f32) -> f32 {
+    x * x * (3.0 - 2.0 * x)
 }
 
 #[cfg(feature = "terminal")]
@@ -614,9 +661,21 @@ mod tests {
         let img = image::RgbaImage::from_pixel(80, 60, image::Rgba([255; 4]));
         let config = Config::default();
         let line = render_frame(&img, &config, config.vstretch_secs + 0.01);
-        // One pixel thick in a 60-pixel image: row 29.
-        assert!(line.get_pixel(40, 29).0[0] > 200, "the middle is lit");
-        assert_eq!(line.get_pixel(40, 5).0, [0, 0, 0, 255], "above it is black");
+        // One pixel thick in a 60-pixel image: row 30, with only a faint glow beside it.
+        assert!(line.get_pixel(40, 30).0[0] > 200, "the middle is lit");
+        assert!(
+            line.get_pixel(40, 29).0[0] < 60,
+            "the row above is only glow"
+        );
+        assert!(
+            line.get_pixel(40, 31).0[0] < 60,
+            "the row below is only glow"
+        );
+        assert_eq!(
+            line.get_pixel(40, 5).0,
+            [0, 0, 0, 255],
+            "far above it is black"
+        );
     }
 
     #[test]
