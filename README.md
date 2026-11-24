@@ -1,5 +1,7 @@
 # crt-off
 
+[![GitHub stars](https://img.shields.io/github/stars/aovestdipaperino/crt-off?logo=github&color=brightgreen)](https://github.com/aovestdipaperino/crt-off/stargazers)
+
 <p align="center">
   <a href="https://ai.enzolombardi.net/"><img src="https://img.shields.io/badge/built%20with-AI-D97757?style=flat-square&labelColor=101010&logo=anthropic&logoColor=white" alt="Built with AI — part of Enzo Lombardi's AI portfolio"></a>
 </p>
